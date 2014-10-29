@@ -3837,7 +3837,7 @@ rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
   }
 
   /*  RFC 4585 section 3.5.2 step 6 */
-  sess->allow_early = FALSE;
+  //  sess->allow_early = FALSE; /* HACK to disable early mode */
   /* TODO(mparis): "R MUST recalculate tn = tp + 2*T_rr,
    * and MUST set tp to the previous tn" */
 
