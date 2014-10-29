@@ -3836,6 +3836,9 @@ rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
     sess->next_early_rtcp_time = current_time;
   }
 
+  /* HACK: 20ms to allow other nacks to be in the same packet */
+  sess->next_early_rtcp_time += 20000000;
+
   /*  RFC 4585 section 3.5.2 step 6 */
   //  sess->allow_early = FALSE; /* HACK to disable early mode */
   /* TODO(mparis): "R MUST recalculate tn = tp + 2*T_rr,
