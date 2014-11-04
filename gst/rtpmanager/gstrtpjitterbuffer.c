@@ -1982,6 +1982,7 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GstClockTime total_duration, duration, expected_dts;
   TimerType type;
+  guint lost_packets = 0;
 
   GST_DEBUG_OBJECT (jitterbuffer,
       "dts %" GST_TIME_FORMAT ", last %" GST_TIME_FORMAT,
@@ -2003,7 +2004,6 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
 
   if (total_duration > priv->latency_ns) {
     GstClockTime gap_time;
-    guint lost_packets;
 
     gap_time = total_duration - priv->latency_ns;
 
@@ -2030,7 +2030,7 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
     priv->last_in_dts += gap_time;
   }
 
-  expected_dts = priv->last_in_dts + duration;
+  expected_dts = priv->last_in_dts + (lost_packets + 1) * duration;
 
   if (priv->do_retransmission) {
     TimerData *timer;
