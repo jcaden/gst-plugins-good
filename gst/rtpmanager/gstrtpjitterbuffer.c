@@ -2199,8 +2199,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (G_UNLIKELY (priv->eos))
     goto have_eos;
 
-  calculate_jitter (jitterbuffer, dts, rtptime);
-
   expected = priv->next_in_seqnum;
 
   /* now check against our expected seqnum */
@@ -2212,6 +2210,10 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
     GST_DEBUG_OBJECT (jitterbuffer, "expected #%d, got #%d, gap of %d",
         expected, seqnum, gap);
+
+    if (G_LIKELY (gap > -(priv->rtx_delay_reorder))) {
+      calculate_jitter (jitterbuffer, dts, rtptime);
+    }
 
     if (G_LIKELY (gap == 0)) {
       /* packet is expected */
@@ -2260,6 +2262,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
       priv->ips_dts = GST_CLOCK_TIME_NONE;
     }
   } else {
+    calculate_jitter (jitterbuffer, dts, rtptime);
+
     GST_DEBUG_OBJECT (jitterbuffer, "First buffer #%d", seqnum);
     /* we don't know what the next_in_seqnum should be, wait for the last
      * possible moment to push this buffer, maybe we get an earlier seqnum
