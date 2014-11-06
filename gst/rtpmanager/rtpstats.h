@@ -185,7 +185,7 @@ typedef struct {
  * The maximum number of misordered packets we tollerate. These are packets with
  * a sequence number smaller than the last seen packet.
  */
-#define RTP_MAX_MISORDER     100
+#define RTP_MAX_MISORDER     3000
 
 /**
  * RTPSessionStats:
