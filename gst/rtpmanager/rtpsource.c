@@ -1422,6 +1422,8 @@ rtp_source_get_new_sr (RTPSource * src, guint64 ntpnstime,
   return TRUE;
 }
 
+#include <math.h>
+
 /**
  * rtp_source_get_new_rb:
  * @src: an #RTPSource
@@ -1478,6 +1480,13 @@ rtp_source_get_new_rb (RTPSource * src, GstClockTime time,
   GST_DEBUG ("fraction %" G_GUINT32_FORMAT ", lost %" G_GINT64_FORMAT
       ", extseq %" G_GUINT64_FORMAT ", jitter %d", fraction, lost,
       extended_max, stats->jitter >> 4);
+
+  {
+    double fraction_f = fraction /255.0;
+
+    fraction = sqrt(fraction_f) * 255;
+    GST_DEBUG ("new_fraction %" G_GUINT32_FORMAT, fraction);
+  }
 
   if (rtp_source_get_last_sr (src, &sr_time, &ntptime, NULL, NULL, NULL)) {
     GstClockTime diff;
