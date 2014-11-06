@@ -2316,12 +2316,13 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         }
       } else {
         guint rtp_max_dropout = get_rtp_max_dropout (priv);
+        gint total_gap = priv->timers->len + gap;
 
         /* new packet, we are missing some packets */
-        if (G_UNLIKELY (gap > rtp_max_dropout)) {
+        if (G_UNLIKELY (total_gap > rtp_max_dropout)) {
           /* packet too far in future, reset */
-          GST_DEBUG_OBJECT (jitterbuffer, "reset: buffer too new %d > %d", gap,
-              rtp_max_dropout);
+          GST_DEBUG_OBJECT (jitterbuffer, "Reset: too lost packets %d > %d",
+              total_gap, rtp_max_dropout);
           reset = TRUE;
         } else {
           GST_DEBUG_OBJECT (jitterbuffer, "%d missing packets", gap);
