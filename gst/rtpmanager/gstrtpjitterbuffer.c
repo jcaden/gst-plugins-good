@@ -128,6 +128,7 @@ enum
 #define DEFAULT_MODE                RTP_JITTER_BUFFER_MODE_SLAVE
 #define DEFAULT_PERCENT             0
 #define DEFAULT_DO_RETRANSMISSION   FALSE
+#define DEFAULT_RTX_NEXT_SEQNUM     TRUE
 #define DEFAULT_RTX_DELAY           -1
 #define DEFAULT_RTX_MIN_DELAY       0
 #define DEFAULT_RTX_DELAY_REORDER   3
@@ -152,6 +153,7 @@ enum
   PROP_MODE,
   PROP_PERCENT,
   PROP_DO_RETRANSMISSION,
+  PROP_RTX_NEXT_SEQNUM,
   PROP_RTP_MAX_DROPOUT,
   PROP_RTX_DELAY,
   PROP_RTX_MIN_DELAY,
@@ -250,6 +252,7 @@ struct _GstRtpJitterBufferPrivate
   gint64 ts_offset;
   gboolean do_lost;
   gboolean do_retransmission;
+  gboolean rtx_next_seqnum;
   gint rtp_max_dropout;
   gint rtx_delay;
   guint rtx_min_delay;
@@ -538,6 +541,20 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
           "Send retransmission events upstream when a packet is late",
           DEFAULT_DO_RETRANSMISSION,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  /**
+   * GstRtpJitterBuffer:rtx-next-seqnum:
+   *
+   * Schedule a GstRTPRetransmission event for the next expected packet seqnum.
+   * This is, when packet N arrives, the N+1 will be requested if it does not
+   * arrive at the expected time.
+   * The expected time is calculated using the dts of N and the packet spacing.
+   *
+   * Since: 1.6
+   */
+  g_object_class_install_property (gobject_class, PROP_RTX_NEXT_SEQNUM,
+      g_param_spec_boolean ("rtx-next-seqnum", "RTX next seqnum",
+          "Send retransmission event when the next expected packet is considered late",
+          DEFAULT_RTX_NEXT_SEQNUM, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstRtpJitterBuffer:rtp-max-dropout:
@@ -791,6 +808,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->drop_on_latency = DEFAULT_DROP_ON_LATENCY;
   priv->do_lost = DEFAULT_DO_LOST;
   priv->do_retransmission = DEFAULT_DO_RETRANSMISSION;
+  priv->rtx_next_seqnum = DEFAULT_RTX_NEXT_SEQNUM;
   priv->rtp_max_dropout = RTP_MAX_DROPOUT;
   priv->rtx_delay = DEFAULT_RTX_DELAY;
   priv->rtx_min_delay = DEFAULT_RTX_MIN_DELAY;
@@ -1962,7 +1980,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
   }
 
   do_next_seqnum = do_next_seqnum && priv->packet_spacing > 0
-      && priv->do_retransmission;
+      && priv->do_retransmission && priv->rtx_next_seqnum;
 
   if (timer && timer->type != TIMER_TYPE_DEADLINE) {
     if (timer->num_rtx_retry > 0) {
@@ -3636,6 +3654,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       priv->do_retransmission = g_value_get_boolean (value);
       JBUF_UNLOCK (priv);
       break;
+    case PROP_RTX_NEXT_SEQNUM:
+      JBUF_LOCK (priv);
+      priv->rtx_next_seqnum = g_value_get_boolean (value);
+      JBUF_UNLOCK (priv);
+      break;
     case PROP_RTP_MAX_DROPOUT:
       JBUF_LOCK (priv);
       priv->rtp_max_dropout = g_value_get_int (value);
@@ -3735,6 +3758,11 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
     case PROP_DO_RETRANSMISSION:
       JBUF_LOCK (priv);
       g_value_set_boolean (value, priv->do_retransmission);
+      JBUF_UNLOCK (priv);
+      break;
+    case PROP_RTX_NEXT_SEQNUM:
+      JBUF_LOCK (priv);
+      g_value_set_boolean (value, priv->rtx_next_seqnum);
       JBUF_UNLOCK (priv);
       break;
     case PROP_RTP_MAX_DROPOUT:
