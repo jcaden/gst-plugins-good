@@ -138,6 +138,9 @@ enum
 #define DEFAULT_AUTO_RTX_DELAY (20 * GST_MSECOND)
 #define DEFAULT_AUTO_RTX_TIMEOUT (40 * GST_MSECOND)
 
+#define RTP_MIN_DROPOUT 20
+#define RTP_DROPOUT_FACTOR 2
+
 enum
 {
   PROP_0,
@@ -148,6 +151,7 @@ enum
   PROP_MODE,
   PROP_PERCENT,
   PROP_DO_RETRANSMISSION,
+  PROP_RTP_MAX_DROPOUT,
   PROP_RTX_DELAY,
   PROP_RTX_MIN_DELAY,
   PROP_RTX_DELAY_REORDER,
@@ -244,6 +248,7 @@ struct _GstRtpJitterBufferPrivate
   gint64 ts_offset;
   gboolean do_lost;
   gboolean do_retransmission;
+  gint rtp_max_dropout;
   gint rtx_delay;
   guint rtx_min_delay;
   gint rtx_delay_reorder;
@@ -315,6 +320,9 @@ struct _GstRtpJitterBufferPrivate
   GstClockTime last_dts;
   guint64 last_rtptime;
   GstClockTime avg_jitter;
+
+  /* for n packets */
+    GQueue /*GstClockTime */  * dts_queue;
 };
 
 typedef enum
@@ -526,6 +534,23 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
       g_param_spec_boolean ("do-retransmission", "Do Retransmission",
           "Send retransmission events upstream when a packet is late",
           DEFAULT_DO_RETRANSMISSION,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * GstRtpJitterBuffer:rtp-max-dropout:
+   *
+   * When consider too many lost packets. In this case the jitterbuffer will
+   * be reset and flushed.
+   *
+   * When -1 is used, the value will be estimated based on number of packets
+   * received per time.
+   *
+   * Since: 1.6
+   */
+  g_object_class_install_property (gobject_class, PROP_RTP_MAX_DROPOUT,
+      g_param_spec_int ("rtp-max-dropout", "RTP max dropout",
+          "When consider too many lost packets. In this case the jitterbuffer will "
+          "be reset and flushed. (-1 automatic)", -1, G_MAXINT, RTP_MAX_DROPOUT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
@@ -748,6 +773,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->drop_on_latency = DEFAULT_DROP_ON_LATENCY;
   priv->do_lost = DEFAULT_DO_LOST;
   priv->do_retransmission = DEFAULT_DO_RETRANSMISSION;
+  priv->rtp_max_dropout = RTP_MAX_DROPOUT;
   priv->rtx_delay = DEFAULT_RTX_DELAY;
   priv->rtx_min_delay = DEFAULT_RTX_MIN_DELAY;
   priv->rtx_delay_reorder = DEFAULT_RTX_DELAY_REORDER;
@@ -764,6 +790,8 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   g_cond_init (&priv->jbuf_timer);
   g_cond_init (&priv->jbuf_event);
   g_cond_init (&priv->jbuf_query);
+
+  priv->dts_queue = g_queue_new ();
 
   /* reset skew detection initialy */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
@@ -835,6 +863,12 @@ free_item (RTPJitterBufferItem * item)
 }
 
 static void
+destroy_GstClockTime (gpointer p)
+{
+  g_slice_free (GstClockTime, p);
+}
+
+static void
 gst_rtp_jitter_buffer_finalize (GObject * object)
 {
   GstRtpJitterBuffer *jitterbuffer;
@@ -848,6 +882,8 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_cond_clear (&priv->jbuf_timer);
   g_cond_clear (&priv->jbuf_event);
   g_cond_clear (&priv->jbuf_query);
+
+  g_queue_free_full (priv->dts_queue, (GDestroyNotify) destroy_GstClockTime);
 
   rtp_jitter_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
   g_object_unref (priv->jbuf);
@@ -1841,6 +1877,25 @@ get_rtx_delay (GstRtpJitterBufferPrivate * priv)
   return delay;
 }
 
+static guint
+get_rtp_max_dropout (GstRtpJitterBufferPrivate * priv)
+{
+  guint packets_last_second, n_packets_in_latency;
+  guint ret;
+
+  if (priv->rtp_max_dropout != -1) {
+    return priv->rtp_max_dropout;
+  }
+
+  packets_last_second = g_queue_get_length (priv->dts_queue);
+  n_packets_in_latency = (packets_last_second * priv->latency_ms) / 1000;
+
+  ret = MAX (RTP_MIN_DROPOUT, n_packets_in_latency / RTP_DROPOUT_FACTOR);
+  ret = MIN (RTP_MAX_DROPOUT, ret);
+
+  return ret;
+}
+
 /* we just received a packet with seqnum and dts.
  *
  * First check for old seqnum that we are still expecting. If the gap with the
@@ -2115,6 +2170,31 @@ no_time:
   }
 }
 
+static guint
+calculate_n_packets_last_second (GstRtpJitterBufferPrivate * priv,
+    GstClockTime dts)
+{
+  GstClockTime *current_dts, *last_dts, diff;
+
+  current_dts = g_slice_new0 (GstClockTime);
+  *current_dts = dts;
+  g_queue_push_head (priv->dts_queue, current_dts);
+
+  last_dts = (GstClockTime *) g_queue_peek_tail (priv->dts_queue);
+  diff = *current_dts - *last_dts;
+  while (diff > GST_SECOND) {
+    gpointer p;
+
+    p = g_queue_pop_tail (priv->dts_queue);
+    destroy_GstClockTime (p);
+
+    last_dts = (GstClockTime *) g_queue_peek_tail (priv->dts_queue);
+    diff = *current_dts - *last_dts;
+  }
+
+  return g_queue_get_length (priv->dts_queue);
+}
+
 static GstFlowReturn
 gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buffer)
@@ -2215,6 +2295,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
       calculate_jitter (jitterbuffer, dts, rtptime);
     }
 
+    calculate_n_packets_last_second (priv, dts);
+
     if (G_LIKELY (gap == 0)) {
       /* packet is expected */
       calculate_packet_spacing (jitterbuffer, rtptime, dts);
@@ -2233,11 +2315,13 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
           GST_DEBUG_OBJECT (jitterbuffer, "old packet received");
         }
       } else {
+        guint rtp_max_dropout = get_rtp_max_dropout (priv);
+
         /* new packet, we are missing some packets */
-        if (G_UNLIKELY (gap > RTP_MAX_DROPOUT)) {
+        if (G_UNLIKELY (gap > rtp_max_dropout)) {
           /* packet too far in future, reset */
           GST_DEBUG_OBJECT (jitterbuffer, "reset: buffer too new %d > %d", gap,
-              RTP_MAX_DROPOUT);
+              rtp_max_dropout);
           reset = TRUE;
         } else {
           GST_DEBUG_OBJECT (jitterbuffer, "%d missing packets", gap);
@@ -3531,6 +3615,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       priv->do_retransmission = g_value_get_boolean (value);
       JBUF_UNLOCK (priv);
       break;
+    case PROP_RTP_MAX_DROPOUT:
+      JBUF_LOCK (priv);
+      priv->rtp_max_dropout = g_value_get_int (value);
+      JBUF_UNLOCK (priv);
+      break;
     case PROP_RTX_DELAY:
       JBUF_LOCK (priv);
       priv->rtx_delay = g_value_get_int (value);
@@ -3620,6 +3709,11 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
     case PROP_DO_RETRANSMISSION:
       JBUF_LOCK (priv);
       g_value_set_boolean (value, priv->do_retransmission);
+      JBUF_UNLOCK (priv);
+      break;
+    case PROP_RTP_MAX_DROPOUT:
+      JBUF_LOCK (priv);
+      g_value_set_int (value, priv->rtp_max_dropout);
       JBUF_UNLOCK (priv);
       break;
     case PROP_RTX_DELAY:
