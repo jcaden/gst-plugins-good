@@ -2252,7 +2252,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         rtp_jitter_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
         rtp_jitter_buffer_reset_skew (priv->jbuf);
         remove_all_timers (jitterbuffer);
-        priv->last_popped_seqnum = -1;
         priv->next_seqnum = seqnum;
         do_next_seqnum = TRUE;
         JBUF_SIGNAL_EVENT (priv);
@@ -2524,6 +2523,19 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
 
       /* we need to make writable to change the flags and timestamps */
       outbuf = gst_buffer_make_writable (item->data);
+
+      if (priv->last_popped_seqnum != -1
+          && (seqnum - priv->last_popped_seqnum) > 1) {
+        priv->discont = TRUE;
+
+        if (priv->do_lost) {
+          GstEvent *event;
+
+          GST_DEBUG_OBJECT (jitterbuffer, "Pushing GAP event");
+          event = gst_event_new_gap (0, 0);
+          gst_pad_push_event (priv->srcpad, event);
+        }
+      }
 
       if (G_UNLIKELY (priv->discont)) {
         /* set DISCONT flag when we missed a packet. We pushed the buffer writable
